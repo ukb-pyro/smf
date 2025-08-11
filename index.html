@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Teleology → Recursion → Sonata</title>
 <style>
-  :root{ --bg:#111; --text:#eee; --muted:#bbb; --ink:#9ad1ff; }
+  :root{ --bg:#111; --text:#eee; --ink:#9ad1ff }
   *{ box-sizing:border-box }
   html,body{ height:100% }
   body{
@@ -17,9 +17,8 @@
   h1{
     font-size:clamp(1rem,2.6vw,1.4rem); letter-spacing:.1em; margin:0; text-align:center; color:#ddd;
   }
-  a{ color:#ddd; text-decoration:none; transition:color .25s ease }
-  a:hover{ color:var(--ink); text-decoration:underline }
-  canvas{ width:min(80vmin,900px); height:auto; aspect-ratio:4/1.6; display:block }
+  a{ color:#ddd; text-decoration:none } a:hover{ color:var(--ink); text-decoration:underline }
+  canvas{ width:min(84vmin,980px); height:auto; aspect-ratio:4/1.6; display:block }
   footer{ color:#777; font-size:clamp(.7rem,1.5vw,.85rem) }
 </style>
 </head>
@@ -30,48 +29,46 @@
     <a href="https://ukb-pyro.github.io/inf/" target="_blank" rel="noopener">Sonata</a> →
   </h1>
 
-  <canvas id="stage" aria-label="Smooth morph: line → circle → infinity → line"></canvas>
+  <canvas id="stage" aria-label="Adagio morph: line → circle (closing ends) → ∞ → broken loop (two ends) → line"></canvas>
 
   <footer>© 2025 Ukubona LLC</footer>
 
 <script>
-(function(){
+(() => {
   const canvas = document.getElementById('stage');
   const ctx = canvas.getContext('2d');
 
-  // --- sizing with HiDPI crispness ---
+  // --- sizing (crisp on HiDPI) ---
   function fit(){
     const cssW = canvas.getBoundingClientRect().width;
     const cssH = cssW / (4/1.6);
     const dpr = Math.max(1, window.devicePixelRatio || 1);
     canvas.width  = Math.floor(cssW * dpr);
     canvas.height = Math.floor(cssH * dpr);
-    ctx.setTransform(dpr,0,0,dpr,0,0); // draw in CSS pixels
+    ctx.setTransform(dpr,0,0,dpr,0,0);
   }
 
-  // parametric shapes sampled at uniform t in [0,1)
-  const N = 900; // many points for imperceptible transitions
-  const T = 8_000; // ms per morph leg (long & smooth)
-  const CYCLE = T * 3; // line->circle, circle->∞, ∞->line
+  // --- parameters ---
+  const N = 1200;              // dense sampling for imperceptible motion
+  const LEG_MS = 16000;        // adagio: 16s per leg
   const TWO_PI = Math.PI * 2;
 
-  // ease: very gentle S-curve (cosine)
+  // very gentle cosine ease
   const ease = t => 0.5 - 0.5 * Math.cos(Math.PI * t);
 
-  // base sampler returning arrays of [x,y]
+  // sample helpers
   function sample(fn){
     const pts = new Array(N);
     for(let i=0;i<N;i++){
-      const t = i / N;
-      pts[i] = fn(t);
+      pts[i] = fn(i / N);
     }
     return pts;
   }
 
-  // shapes centered at (0,0) with radius a, later scaled to canvas
-  const line = sample(t => [ (t*2-1), 0 ]);                        // horizontal segment [-1,1]×{0}
-  const circle = sample(t => [ Math.cos(TWO_PI*t), Math.sin(TWO_PI*t) ]); // unit circle
-  // Lemniscate of Gerono (sideways ∞), vertically softened to better match circle
+  // canonical shapes, centered at origin
+  const line = sample(t => [ (t*2-1), 0 ]);
+  const circle = sample(t => [ Math.cos(TWO_PI*t), Math.sin(TWO_PI*t) ]);
+  // Lemniscate of Gerono (∞), scaled vertically for pleasing proportion
   const lemni = sample(t => {
     const th = TWO_PI * t;
     const x = Math.cos(th);
@@ -79,73 +76,127 @@
     return [x, y];
   });
 
-  // interpolate between two shapes, pointwise
-  function blend(a, b, m){
+  // index of the lemniscate's crossing (nearest to 0,0), used as "break" point
+  const lemniCrossIdx = (() => {
+    let best=0, bestR=1e9;
+    for(let i=0;i<N;i++){
+      const [x,y] = lemni[i];
+      const r = x*x + y*y;
+      if(r < bestR){ bestR=r; best=i; }
+    }
+    return best;
+  })();
+
+  // blend two shapes pointwise
+  function blend(A, B, m){
     const out = new Array(N);
     for(let i=0;i<N;i++){
-      const x = a[i][0] + (b[i][0] - a[i][0]) * m;
-      const y = a[i][1] + (b[i][1] - a[i][1]) * m;
-      out[i] = [x, y];
+      const ax=A[i], bx=B[i];
+      out[i] = [ ax[0] + (bx[0]-ax[0])*m, ax[1] + (bx[1]-ax[1])*m ];
     }
     return out;
   }
 
-  // subtle "breathing" on radius to avoid mechanical feel
+  // subtle breathing to avoid mechanical feel
   function radius(now, base){
-    return base * (1 + 0.02 * Math.sin(now/3000) + 0.01 * Math.cos(now/7000));
+    return base * (1 + 0.02 * Math.sin(now/4200) + 0.01 * Math.cos(now/7600));
   }
 
-  function draw(now){
-    fit();
-    const w = canvas.width / (window.devicePixelRatio||1);
-    const h = canvas.height / (window.devicePixelRatio||1);
-    const cx = w/2, cy = h/2;
-    const scale = Math.min(w, h) * 0.38;
-
-    // which leg of the cycle?
-    const t = (now % CYCLE);
-    const leg = Math.floor(t / T);          // 0,1,2
-    const local = (t % T) / T;              // 0..1 within leg
-    const m = ease(local);                  // eased morph amount
-
-    // choose endpoints
-    let A, B;
-    if(leg === 0){ A = line;   B = circle; }
-    else if(leg === 1){ A = circle; B = lemni; }
-    else { A = lemni; B = line; }
-
-    // blend and render
-    const pts = blend(A, B, m);
-    const r = radius(now, scale);
-
-    ctx.clearRect(0,0,w,h);
-    ctx.save();
-    ctx.translate(cx, cy);
-
+  // draw with optional "gap" on closed curves; gap starts at given index
+  function drawPolyline(pts, opts){
+    const {close=false, gapFrac=0, gapIndex=0, w, h} = opts;
     ctx.beginPath();
-    for(let i=0;i<N;i++){
-      const x = pts[i][0] * r;
-      const y = pts[i][1] * r;
-      if(i===0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
+
+    if(gapFrac > 0){
+      const n = pts.length;
+      const gapN = Math.max(2, Math.floor(n * gapFrac));
+      const start = ((gapIndex % n) + n) % n;
+      const count = n - gapN;
+      for(let k=0;k<count;k++){
+        const i = (start + k) % n;
+        const p = pts[i];
+        if(k===0) ctx.moveTo(p[0], p[1]); else ctx.lineTo(p[0], p[1]);
+      }
+      // open ends (no closePath)
+    }else{
+      // full stroke
+      ctx.moveTo(pts[0][0], pts[0][1]);
+      for(let i=1;i<pts.length;i++) ctx.lineTo(pts[i][0], pts[i][1]);
+      if(close) ctx.closePath();
     }
-    // for circle/lemni, gently close; for the line it’s effectively a straight segment
-    ctx.closePath();
 
     ctx.lineWidth = Math.max(2, Math.min(6, w*0.006));
     ctx.lineJoin = "round";
     ctx.lineCap  = "round";
     ctx.strokeStyle = "#9ad1ff";
-    ctx.shadowColor = "rgba(154,209,255,.25)";
+    ctx.shadowColor = "rgba(154,209,255,.22)";
     ctx.shadowBlur = 8;
     ctx.stroke();
+  }
 
-    ctx.restore();
-    requestAnimationFrame(draw);
+  function frame(now){
+    fit();
+    const w = canvas.width / (window.devicePixelRatio||1);
+    const h = canvas.height / (window.devicePixelRatio||1);
+    const cx = w/2, cy = h/2;
+    const base = Math.min(w, h) * 0.38;
+    const r = radius(now, base);
+
+    // 4-leg cycle:
+    // 0) line -> circle (ends stay open; closes only at tail)
+    // 1) circle -> lemni (closed)
+    // 2) lemni -> circle (break open during this leg at the crossing)
+    // 3) circle (open) -> line (open)
+    const CYCLE = LEG_MS * 4;
+    const t = (now % CYCLE);
+    const leg = Math.floor(t / LEG_MS);
+    const local = (t % LEG_MS) / LEG_MS;
+    const m = ease(local);
+
+    let A, B, closeNow=false, gapFrac=0, gapIndex=0;
+
+    if(leg === 0){
+      // line -> circle, keep ends visible until the very end
+      A = line; B = circle;
+      closeNow = (m > 0.995); // seal at the last breath
+      gapFrac = 0;            // no artificial gap; openness comes from not closing
+      gapIndex = 0;
+    }else if(leg === 1){
+      // circle -> infinity, closed throughout
+      A = circle; B = lemni;
+      closeNow = true;
+      gapFrac = 0;
+      gapIndex = 0;
+    }else if(leg === 2){
+      // infinity -> circle while BREAKING the loop (two ends) at the crossing
+      A = lemni; B = circle;
+      closeNow = false;
+      // grow a visible break (up to ~22% of the loop)
+      gapFrac = 0.22 * Math.pow(m, 0.85);
+      gapIndex = lemniCrossIdx; // break begins at the ∞ crossing
+    }else{
+      // open circle -> line (stay open)
+      A = circle; B = line;
+      closeNow = false;
+      gapFrac = 0.22; // keep two ends while it straightens
+      gapIndex = 0;
+    }
+
+    const pts = blend(A, B, m);
+
+    // transform to canvas space
+    for(let i=0;i<pts.length;i++){
+      pts[i] = [ cx + pts[i][0]*r, cy + pts[i][1]*r ];
+    }
+
+    ctx.clearRect(0,0,w,h);
+    drawPolyline(pts, {close: closeNow, gapFrac, gapIndex, w, h});
+
+    requestAnimationFrame(frame);
   }
 
   fit();
-  requestAnimationFrame(draw);
+  requestAnimationFrame(frame);
   window.addEventListener('resize', fit, {passive:true});
 })();
 </script>
