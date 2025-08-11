@@ -14,9 +14,7 @@
     display:flex; flex-direction:column; align-items:center; justify-content:center;
     padding:1rem; gap:1rem;
   }
-  h1{
-    font-size:clamp(1rem,2.6vw,1.4rem); letter-spacing:.1em; margin:0; text-align:center; color:#ddd;
-  }
+  h1{ font-size:clamp(1rem,2.6vw,1.4rem); letter-spacing:.1em; margin:0; text-align:center; color:#ddd }
   a{ color:#ddd; text-decoration:none } a:hover{ color:var(--ink); text-decoration:underline }
   canvas{ width:min(84vmin,980px); height:auto; aspect-ratio:4/1.6; display:block }
   footer{ color:#777; font-size:clamp(.7rem,1.5vw,.85rem) }
@@ -29,7 +27,7 @@
     <a href="https://ukb-pyro.github.io/inf/" target="_blank" rel="noopener">Sonata</a> →
   </h1>
 
-  <canvas id="stage" aria-label="Adagio morph: line → circle (closing ends) → ∞ → broken loop (two ends) → line"></canvas>
+  <canvas id="stage" aria-label="Adagio sostenuto: line → circle → ∞ → broken ∞ → line"></canvas>
 
   <footer>© 2025 Ukubona LLC</footer>
 
@@ -38,7 +36,7 @@
   const canvas = document.getElementById('stage');
   const ctx = canvas.getContext('2d');
 
-  // --- sizing (crisp on HiDPI) ---
+  // HiDPI sizing
   function fit(){
     const cssW = canvas.getBoundingClientRect().width;
     const cssH = cssW / (4/1.6);
@@ -48,149 +46,139 @@
     ctx.setTransform(dpr,0,0,dpr,0,0);
   }
 
-  // --- parameters ---
-  const N = 1200;              // dense sampling for imperceptible motion
-  const LEG_MS = 16000;        // adagio: 16s per leg
+  // --- tempo & resolution ---
+  const N      = 1400;    // dense sampling for imperceptible morphs
+  const LEG_MS = 45000;   // adagio sostenuto: 45s per leg
   const TWO_PI = Math.PI * 2;
 
-  // very gentle cosine ease
+  // ultra-gentle easing (cosine-in-out)
   const ease = t => 0.5 - 0.5 * Math.cos(Math.PI * t);
 
-  // sample helpers
+  // sample helper
   function sample(fn){
     const pts = new Array(N);
-    for(let i=0;i<N;i++){
-      pts[i] = fn(i / N);
-    }
+    for(let i=0;i<N;i++) pts[i] = fn(i/N);
     return pts;
   }
 
-  // canonical shapes, centered at origin
-  const line = sample(t => [ (t*2-1), 0 ]);
-  const circle = sample(t => [ Math.cos(TWO_PI*t), Math.sin(TWO_PI*t) ]);
-  // Lemniscate of Gerono (∞), scaled vertically for pleasing proportion
-  const lemni = sample(t => {
-    const th = TWO_PI * t;
-    const x = Math.cos(th);
-    const y = 0.60 * Math.sin(th) * Math.cos(th); // 0.5*sin(2θ) scaled
-    return [x, y];
+  // canonical shapes (centered at origin, radius≈1)
+  const line   = sample(u => [ (u*2-1), 0 ]);
+  const circle = sample(u => [ Math.cos(TWO_PI*u), Math.sin(TWO_PI*u) ]);
+  const lemni  = sample(u => { // lemniscate of Gerono, softened vertically
+    const th = TWO_PI*u;
+    return [ Math.cos(th), 0.60*Math.sin(th)*Math.cos(th) ];
   });
 
-  // index of the lemniscate's crossing (nearest to 0,0), used as "break" point
+  // index near lemniscate crossing (for the "break")
   const lemniCrossIdx = (() => {
-    let best=0, bestR=1e9;
+    let k=0, best=1e9;
     for(let i=0;i<N;i++){
       const [x,y] = lemni[i];
-      const r = x*x + y*y;
-      if(r < bestR){ bestR=r; best=i; }
+      const r2 = x*x + y*y;
+      if(r2 < best){ best=r2; k=i; }
     }
-    return best;
+    return k;
   })();
 
-  // blend two shapes pointwise
-  function blend(A, B, m){
+  // pointwise blend
+  function blend(A,B,m){
     const out = new Array(N);
     for(let i=0;i<N;i++){
-      const ax=A[i], bx=B[i];
-      out[i] = [ ax[0] + (bx[0]-ax[0])*m, ax[1] + (bx[1]-ax[1])*m ];
+      const a=A[i], b=B[i];
+      out[i] = [ a[0] + (b[0]-a[0])*m, a[1] + (b[1]-a[1])*m ];
     }
     return out;
   }
 
-  // subtle breathing to avoid mechanical feel
+  // subtle breathing on global radius so it never feels mechanical
   function radius(now, base){
-    return base * (1 + 0.02 * Math.sin(now/4200) + 0.01 * Math.cos(now/7600));
+    return base * (1 + 0.02*Math.sin(now/5200) + 0.01*Math.cos(now/8800));
   }
 
-  // draw with optional "gap" on closed curves; gap starts at given index
-  function drawPolyline(pts, opts){
-    const {close=false, gapFrac=0, gapIndex=0, w, h} = opts;
+  // draw a (possibly open) curve; when gapFrac>0 omit an arc (two ends)
+  function strokeCurve(pts, {closed=false, gapFrac=0, gapIndex=0, w}){
     ctx.beginPath();
 
     if(gapFrac > 0){
-      const n = pts.length;
-      const gapN = Math.max(2, Math.floor(n * gapFrac));
-      const start = ((gapIndex % n) + n) % n;
-      const count = n - gapN;
-      for(let k=0;k<count;k++){
-        const i = (start + k) % n;
+      const n    = pts.length;
+      const gapN = Math.max(2, Math.floor(n*gapFrac));
+      const s    = ((gapIndex % n) + n) % n;
+      const cnt  = n - gapN;
+
+      // draw cnt points as a single open strand
+      for(let k=0;k<cnt;k++){
+        const i = (s + k) % n;
         const p = pts[i];
         if(k===0) ctx.moveTo(p[0], p[1]); else ctx.lineTo(p[0], p[1]);
       }
-      // open ends (no closePath)
-    }else{
-      // full stroke
+    } else {
+      // full curve
       ctx.moveTo(pts[0][0], pts[0][1]);
       for(let i=1;i<pts.length;i++) ctx.lineTo(pts[i][0], pts[i][1]);
-      if(close) ctx.closePath();
+      if(closed) ctx.closePath();
     }
 
-    ctx.lineWidth = Math.max(2, Math.min(6, w*0.006));
-    ctx.lineJoin = "round";
-    ctx.lineCap  = "round";
+    ctx.lineWidth   = Math.max(2, Math.min(6, w*0.006));
+    ctx.lineJoin    = "round";
+    ctx.lineCap     = "round";
     ctx.strokeStyle = "#9ad1ff";
-    ctx.shadowColor = "rgba(154,209,255,.22)";
-    ctx.shadowBlur = 8;
+    ctx.shadowColor = "rgba(154,209,255,.18)";
+    ctx.shadowBlur  = 6;
     ctx.stroke();
   }
 
   function frame(now){
     fit();
-    const w = canvas.width / (window.devicePixelRatio||1);
-    const h = canvas.height / (window.devicePixelRatio||1);
+
+    const w  = canvas.width / (window.devicePixelRatio||1);
+    const h  = canvas.height / (window.devicePixelRatio||1);
     const cx = w/2, cy = h/2;
     const base = Math.min(w, h) * 0.38;
-    const r = radius(now, base);
+    const r    = radius(now, base);
 
-    // 4-leg cycle:
-    // 0) line -> circle (ends stay open; closes only at tail)
-    // 1) circle -> lemni (closed)
-    // 2) lemni -> circle (break open during this leg at the crossing)
-    // 3) circle (open) -> line (open)
-    const CYCLE = LEG_MS * 4;
-    const t = (now % CYCLE);
-    const leg = Math.floor(t / LEG_MS);
-    const local = (t % LEG_MS) / LEG_MS;
-    const m = ease(local);
+    // four-leg cycle
+    const CYCLE = LEG_MS*4;
+    const t     = (now % CYCLE);
+    const leg   = Math.floor(t / LEG_MS);   // 0..3
+    const local = (t % LEG_MS) / LEG_MS;    // 0..1
+    const m     = ease(local);
 
-    let A, B, closeNow=false, gapFrac=0, gapIndex=0;
+    let A, B, closed=false, gapFrac=0, gapIndex=0;
 
     if(leg === 0){
-      // line -> circle, keep ends visible until the very end
+      // line -> circle (two teloi remain visible; seal only at transition edge)
       A = line; B = circle;
-      closeNow = (m > 0.995); // seal at the last breath
-      gapFrac = 0;            // no artificial gap; openness comes from not closing
-      gapIndex = 0;
-    }else if(leg === 1){
-      // circle -> infinity, closed throughout
+      closed  = false;      // keep open; endpoints "kiss" at the very end
+      gapFrac = 0;          // no artificial gap
+    } else if(leg === 1){
+      // circle -> lemni (fully closed; absolutely no gap)
       A = circle; B = lemni;
-      closeNow = true;
+      closed  = true;
       gapFrac = 0;
-      gapIndex = 0;
-    }else if(leg === 2){
-      // infinity -> circle while BREAKING the loop (two ends) at the crossing
-      A = lemni; B = circle;
-      closeNow = false;
-      // grow a visible break (up to ~22% of the loop)
-      gapFrac = 0.22 * Math.pow(m, 0.85);
-      gapIndex = lemniCrossIdx; // break begins at the ∞ crossing
-    }else{
-      // open circle -> line (stay open)
-      A = circle; B = line;
-      closeNow = false;
-      gapFrac = 0.22; // keep two ends while it straightens
-      gapIndex = 0;
+    } else if(leg === 2){
+      // lemni -> broken lemni (grow a gap at the crossing)
+      A = lemni; B = lemni; // shape fixed; only gap changes
+      closed  = false;
+      gapFrac = 0.22 * m;   // up to ~22% arc removed
+      gapIndex= lemniCrossIdx;
+    } else {
+      // broken lemni -> line (stay open; shrink gap smoothly while straightening)
+      A = lemni; B = line;
+      closed  = false;
+      // carry the break at start, then fade it out as we approach the line
+      gapFrac = 0.22 * (1 - m);
+      gapIndex= lemniCrossIdx;
     }
 
+    // blend & place
     const pts = blend(A, B, m);
-
-    // transform to canvas space
-    for(let i=0;i<pts.length;i++){
-      pts[i] = [ cx + pts[i][0]*r, cy + pts[i][1]*r ];
+    for(let i=0;i<N;i++){
+      pts[i][0] = cx + pts[i][0]*r;
+      pts[i][1] = cy + pts[i][1]*r;
     }
 
     ctx.clearRect(0,0,w,h);
-    drawPolyline(pts, {close: closeNow, gapFrac, gapIndex, w, h});
+    strokeCurve(pts, {closed, gapFrac, gapIndex, w});
 
     requestAnimationFrame(frame);
   }
